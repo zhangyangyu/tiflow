@@ -16,6 +16,7 @@ package leveldb
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -25,8 +26,8 @@ import (
 	"github.com/pingcap/ticdc/cdc/sorter/leveldb/message"
 	"github.com/pingcap/ticdc/pkg/actor"
 	actormsg "github.com/pingcap/ticdc/pkg/actor/message"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/db"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -53,6 +54,8 @@ type Sorter struct {
 	tableID uint64
 	serde   *encoding.MsgPackGenSerde
 
+	iterAliveDuration time.Duration
+
 	lastSentResolvedTs uint64
 	lastEvent          *model.PolymorphicEvent
 
@@ -63,12 +66,13 @@ type Sorter struct {
 
 	metricTotalEventsKV         prometheus.Counter
 	metricTotalEventsResolvedTs prometheus.Counter
+	metricIterReadDuration      prometheus.ObserverVec
 }
 
 // NewLevelDBSorter creates a new LevelDBSorter
 func NewLevelDBSorter(
 	ctx context.Context, tableID int64, startTs uint64,
-	router *actor.Router, actorID actor.ID,
+	router *actor.Router, actorID actor.ID, cfg *config.DBConfig,
 ) *Sorter {
 	captureAddr := util.CaptureAddrFromCtx(ctx)
 	changefeedID := util.ChangefeedIDFromCtx(ctx)
@@ -79,12 +83,14 @@ func NewLevelDBSorter(
 		tableID:            uint64(tableID),
 		lastSentResolvedTs: startTs,
 		serde:              &encoding.MsgPackGenSerde{},
+		iterAliveDuration:  time.Duration(cfg.IteratorMaxAliveDuration) * time.Millisecond,
 
 		inputCh:  make(chan *model.PolymorphicEvent, sorterInputCap),
 		outputCh: make(chan *model.PolymorphicEvent, sorterOutputCap),
 
 		metricTotalEventsKV:         sorter.EventCount.WithLabelValues(captureAddr, changefeedID, "kv"),
 		metricTotalEventsResolvedTs: sorter.EventCount.WithLabelValues(captureAddr, changefeedID, "resolved"),
+		metricIterReadDuration:      sorterIterReadDurationHistogram.MustCurryWith(prometheus.Labels{"capture": captureAddr, "id": changefeedID}),
 	}
 }
 
@@ -207,14 +213,8 @@ BATCH:
 // events, up to the maxResolvedTs.
 func (ls *Sorter) asyncWrite(
 	ctx context.Context, events []*model.PolymorphicEvent, deleteKeys []message.Key, needSnap bool,
-) (chan message.LimitedSnapshot, error) {
-	// Write and sort events.
-	tk := message.Task{
-		UID:     ls.uid,
-		TableID: ls.tableID,
-		Events:  make(map[message.Key][]byte),
-		SnapCh:  make(chan message.LimitedSnapshot, 1),
-	}
+) (map[message.Key][]byte, error) {
+	writes := make(map[message.Key][]byte)
 	for i := range events {
 		event := events[i]
 		if event.RawKV.OpType == model.OpTypeResolved {
@@ -228,19 +228,15 @@ func (ls *Sorter) asyncWrite(
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		tk.Events[message.Key(key)] = value
+		writes[message.Key(key)] = value
 	}
 
 	// Delete keys of outputted resolved events.
 	for i := range deleteKeys {
-		tk.Events[deleteKeys[i]] = []byte{}
+		writes[deleteKeys[i]] = []byte{}
 	}
 
-	tk.NeedSnap = needSnap
-
-	// Send write task to leveldb.
-	err := ls.router.SendB(ctx, ls.actorID, actormsg.SorterMessage(tk))
-	return tk.SnapCh, errors.Trace(err)
+	return writes, nil
 }
 
 // output nonblocking outputs an event. Caller should retry when it returns false.
@@ -312,7 +308,7 @@ func (ls *Sorter) outputBufferedResolvedEvents(
 // outputBuffer must be empty.
 func (ls *Sorter) outputIterEvents(
 	iter db.Iterator, buffer *outputBuffer, maxResolvedTs uint64,
-) (uint64, error) {
+) (bool, uint64, error) {
 	lenResolvedEvents, lenDeleteKeys := buffer.len()
 	if lenDeleteKeys > 0 || lenResolvedEvents > 0 {
 		log.Panic("buffer is not empty",
@@ -320,14 +316,22 @@ func (ls *Sorter) outputIterEvents(
 			zap.Int("resolvedEvents", lenResolvedEvents))
 	}
 
+	start := time.Now()
 	// The commit ts of buffered resolved events.
 	lastCommitTs := uint64(0)
-	iterHasNext := iter.Next()
+	iterHasNext := iter.Valid()
+	lastNext := time.Now()
+	hasReadNext := true
+SEEK_SEND:
 	for ; iterHasNext; iterHasNext = iter.Next() {
+		now := time.Now()
+		ls.metricIterReadDuration.
+			WithLabelValues("next").Observe(now.Sub(lastNext).Seconds())
+		lastNext = now
 		event := new(model.PolymorphicEvent)
 		_, err := ls.serde.Unmarshal(event, iter.Value())
 		if err != nil {
-			return 0, errors.Trace(err)
+			return hasReadNext, 0, errors.Trace(err)
 		}
 		if lastCommitTs > event.CRTs || lastCommitTs > maxResolvedTs {
 			log.Panic("event commit ts is less than previous event or larger than resolved ts",
@@ -348,13 +352,16 @@ func (ls *Sorter) outputIterEvents(
 		lenResolvedEvents, _ = buffer.len()
 		if lenResolvedEvents > 0 {
 			// Output blocked, break and free iterator.
-			break
+			hasReadNext = false
+			break SEEK_SEND
 		}
 
 		// Append new events to the buffer.
 		lastCommitTs = event.CRTs
 		buffer.appendResolvedEvent(event)
 	}
+	elapsed := time.Since(start)
+	ls.metricIterReadDuration.WithLabelValues("total").Observe(elapsed.Seconds())
 
 	// Try shrink buffer to release memory.
 	buffer.maybeShrink()
@@ -368,7 +375,7 @@ func (ls *Sorter) outputIterEvents(
 
 	// Skip output resolved ts if there is any buffered resolved event.
 	if lenResolvedEvents != 0 {
-		return 0, nil
+		return hasReadNext, 0, nil
 	}
 
 	if !iterHasNext && maxResolvedTs != 0 {
@@ -376,7 +383,7 @@ func (ls *Sorter) outputIterEvents(
 		// resolved ts), output max resolved ts and return an exhausted
 		// resolved ts.
 		ls.outputResolvedTs(maxResolvedTs)
-		return maxResolvedTs, nil
+		return hasReadNext, maxResolvedTs, nil
 	}
 	if lastCommitTs != 0 {
 		// All buffered resolved events are outputted,
@@ -384,7 +391,7 @@ func (ls *Sorter) outputIterEvents(
 		ls.outputResolvedTs(lastCommitTs)
 	}
 
-	return 0, nil
+	return hasReadNext, 0, nil
 }
 
 type pollState struct {
@@ -398,6 +405,12 @@ type pollState struct {
 	maxResolvedTs uint64
 	// All resolved events before the resolved ts are outputted.
 	exhaustedResolvedTs uint64
+
+	maxIterResolvedTs uint64
+	availableIter     *message.LimitedIterator
+	iterCh            chan *message.LimitedIterator
+	aliveTime         time.Time
+	hasReadNext       bool
 }
 
 func (state *pollState) hasResolvedEvents() bool {
@@ -468,7 +481,7 @@ func (ls *Sorter) poll(ctx context.Context, state *pollState) error {
 	needSnap = needSnap && state.hasResolvedEvents()
 
 	// Write new events and delete sent keys.
-	snapCh, err :=
+	writes, err :=
 		ls.asyncWrite(ctx, newEvents, state.outputBuf.deleteKeys, needSnap)
 	if err != nil {
 		return errors.Trace(err)
@@ -478,50 +491,113 @@ func (ls *Sorter) poll(ctx context.Context, state *pollState) error {
 	// Try shrink buffer to release memory.
 	state.outputBuf.maybeShrink()
 
+	// Write and sort events.
+	tk := message.Task{
+		UID:     ls.uid,
+		TableID: ls.tableID,
+		Events:  writes,
+	}
+
 	if !needSnap {
 		// No new events and no resolved events.
 		if !state.hasResolvedEvents() && state.maxResolvedTs != 0 {
 			ls.outputResolvedTs(state.maxResolvedTs)
 		}
+		if state.availableIter != nil {
+			start := time.Now()
+			state.availableIter.Release()
+			ls.metricIterReadDuration.
+				WithLabelValues("release").Observe(time.Since(start).Seconds())
+			state.availableIter = nil
+			state.hasReadNext = true
+			state.iterCh = nil
+		}
+		// Send write task to leveldb.
+		return ls.router.SendB(ctx, ls.actorID, actormsg.SorterMessage(tk))
+	}
+
+	if state.availableIter != nil && state.iterCh != nil {
+		log.Panic("assert failed",
+			zap.Any("availableIter", state.availableIter),
+			zap.Uint64("tableID", ls.tableID))
+	}
+	// Read and send resolved events from iterator.
+	if state.availableIter == nil {
+		if state.iterCh == nil {
+			// We haven't send iter request, send it.
+			iterCh := make(chan *message.LimitedIterator, 1)
+			tk.Iter = &message.IterParam{
+				UID:     ls.uid,
+				TableID: ls.tableID,
+				Range: [2][]byte{
+					encoding.EncodeTsKey(ls.uid, ls.tableID, 0),
+					encoding.EncodeTsKey(ls.uid, ls.tableID, state.maxResolvedTs+1)},
+				ResolvedTs: state.maxResolvedTs,
+				IterCh:     iterCh,
+			}
+			state.iterCh = iterCh
+		}
+
+		// Try receive iterator.
+		var iter *message.LimitedIterator
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case iter = <-state.iterCh:
+		default:
+		}
+
+		if iter != nil {
+			// Iterator received, reset state.iterCh
+			state.iterCh = nil
+			state.availableIter = iter
+			start := time.Now()
+			state.aliveTime = start
+			state.maxIterResolvedTs = iter.ResolvedTs
+			state.availableIter.First()
+			ls.metricIterReadDuration.
+				WithLabelValues("first").Observe(time.Since(start).Seconds())
+		}
+	} else {
+		if state.hasReadNext {
+			state.availableIter.Next()
+		}
+	}
+
+	// Send write/read task to leveldb.
+	err = ls.router.SendB(ctx, ls.actorID, actormsg.SorterMessage(tk))
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	// Iterator not received yet.
+	if state.availableIter == nil {
 		return nil
 	}
 
-	// Wait for writing and deleting.
-	var snap message.LimitedSnapshot
-	var ok bool
-	select {
-	case <-ctx.Done():
-		return errors.Trace(ctx.Err())
-	case snap, ok = <-snapCh:
-	}
-	if !ok && needSnap {
-		return cerrors.ErrUnexpectedSnapshot.GenWithStackByArgs(ls.tableID)
-	}
-	iter := snap.Iterator(
-		encoding.EncodeTsKey(ls.uid, ls.tableID, 0),
-		encoding.EncodeTsKey(ls.uid, ls.tableID, state.maxResolvedTs+1),
-	)
-	defer func() {
-		// Release iter and snap should be fast, otherwise it may block
-		// the funcation.
-		if err := iter.Release(); err != nil {
-			log.Error("iterator release error",
-				zap.Error(err), zap.Uint64("tableID", ls.tableID))
-		}
-		if err := snap.Release(); err != nil {
-			log.Error("snapshot release error",
-				zap.Error(err), zap.Uint64("tableID", ls.tableID))
-		}
-	}()
-
 	// Read and send resolved events from iterator.
-	exhaustedResolvedTs, err :=
-		ls.outputIterEvents(iter, state.outputBuf, state.maxResolvedTs)
+	hasReadNext, exhaustedResolvedTs, err :=
+		ls.outputIterEvents(state.availableIter, state.outputBuf, state.maxIterResolvedTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	if exhaustedResolvedTs > state.exhaustedResolvedTs {
 		state.exhaustedResolvedTs = exhaustedResolvedTs
+	}
+	state.hasReadNext = hasReadNext
+	if !state.availableIter.Valid() || time.Since(state.aliveTime) > ls.iterAliveDuration {
+		start := time.Now()
+		state.availableIter.Release()
+		ls.metricIterReadDuration.
+			WithLabelValues("release").Observe(time.Since(start).Seconds())
+		state.availableIter = nil
+		state.hasReadNext = true
+
+		if state.iterCh != nil {
+			log.Panic("assert failed, must not schedule itert",
+				zap.Any("availableIter", state.availableIter),
+				zap.Uint64("tableID", ls.tableID))
+		}
 	}
 
 	return nil

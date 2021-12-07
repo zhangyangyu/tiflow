@@ -13,7 +13,9 @@
 
 package config
 
-import cerror "github.com/pingcap/ticdc/pkg/errors"
+import (
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+)
 
 // DBConfig represents leveldb sorter config.
 type DBConfig struct {
@@ -70,6 +72,11 @@ type DBConfig struct {
 	//
 	// The default value is 960000.
 	CompactionDeletionThreshold int `toml:"compaction-deletion-threshold" json:"compaction-deletion-threshold"`
+	// IteratorMaxAliveDuration the maximum iterator alive duration in ms.
+	//
+	// The default value is 10000, 10s
+	IteratorMaxAliveDuration int `toml:"iterator-max-alive-duration" json:"iterator-max-alive-duration"`
+
 	// CleanupSpeedLimit limits clean up speed, based on key value entry count.
 	//
 	// The default value is 10000.

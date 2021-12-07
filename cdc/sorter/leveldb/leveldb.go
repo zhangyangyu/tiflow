@@ -14,12 +14,12 @@
 package leveldb
 
 import (
+	"container/list"
 	"context"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cdc/sorter/leveldb/message"
 	"github.com/pingcap/ticdc/pkg/actor"
@@ -32,6 +32,39 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+type iterQueue struct {
+	// Queue of IteratorParams
+	list.List
+	// TableID set.
+	tables map[tableKey]struct{}
+}
+
+type tableKey struct {
+	UID     uint32
+	TableID uint64
+}
+
+func (q *iterQueue) push(params *message.IterParam) {
+	key := tableKey{UID: params.UID, TableID: params.TableID}
+	_, ok := q.tables[key]
+	if ok {
+		return
+	}
+	q.tables[key] = struct{}{}
+	q.List.PushBack(params)
+}
+
+func (q *iterQueue) pop() (*message.IterParam, bool) {
+	item := q.List.Front()
+	if item == nil {
+		return nil, false
+	}
+	q.List.Remove(item)
+	param := item.Value.(*message.IterParam)
+	delete(q.tables, tableKey{UID: param.UID, TableID: param.TableID})
+	return param, true
+}
+
 // DBActor is a db actor, it reads, writes and deletes key value pair in its db.
 type DBActor struct {
 	id      actor.ID
@@ -39,7 +72,8 @@ type DBActor struct {
 	wb      db.Batch
 	wbSize  int
 	wbCap   int
-	snapSem *semaphore.Weighted
+	iterSem *semaphore.Weighted
+	iterQ   iterQueue
 
 	deleteCount int
 	compact     *CompactScheduler
@@ -75,7 +109,8 @@ func NewDBActor(
 		id:      actor.ID(id),
 		db:      db,
 		wb:      wb,
-		snapSem: iterSema,
+		iterSem: iterSema,
+		iterQ:   iterQueue{},
 		wbSize:  wbSize,
 		wbCap:   wbCap,
 		compact: compact,
@@ -85,6 +120,8 @@ func NewDBActor(
 		metricWriteDuration: sorterWriteDurationHistogram.WithLabelValues(captureAddr, idTag),
 		metricWriteBytes:    sorterWriteBytesHistogram.WithLabelValues(captureAddr, idTag),
 	}
+	dba.iterQ.tables = make(map[tableKey]struct{})
+	dba.iterQ.Init()
 	return dba, mb, nil
 }
 
@@ -133,7 +170,7 @@ func (ldb *DBActor) Poll(ctx context.Context, tasks []actormsg.Message) bool {
 		return false
 	default:
 	}
-	snapChs := make([]chan message.LimitedSnapshot, 0, len(tasks))
+	requireIter := false
 	for i := range tasks {
 		var task message.Task
 		msg := tasks[i]
@@ -146,7 +183,7 @@ func (ldb *DBActor) Poll(ctx context.Context, tasks []actormsg.Message) bool {
 		default:
 			log.Panic("unexpected message", zap.Any("message", msg))
 		}
-		events, needSnap, snapCh := task.Events, task.NeedSnap, task.SnapCh
+		events, params := task.Events, task.Iter
 
 		for k, v := range events {
 			if len(v) != 0 {
@@ -162,18 +199,15 @@ func (ldb *DBActor) Poll(ctx context.Context, tasks []actormsg.Message) bool {
 				log.Panic("db error", zap.Error(err))
 			}
 		}
-		if needSnap {
+		if params != nil {
 			// Append to slice for later batch acquiring iterators.
-			snapChs = append(snapChs, snapCh)
-		} else {
-			// Or close channel to notify caller that that its task is done.
-			close(snapCh)
+			ldb.iterQ.push(params)
+			requireIter = true
 		}
 	}
 
 	// Force write only if there is a task requires an iterator.
-	forceWrite := len(snapChs) != 0
-	wrote, err := ldb.maybeWrite(forceWrite)
+	wrote, err := ldb.maybeWrite(requireIter)
 	if err != nil {
 		log.Panic("db error", zap.Error(err))
 	}
@@ -182,25 +216,31 @@ func (ldb *DBActor) Poll(ctx context.Context, tasks []actormsg.Message) bool {
 		ldb.maybeScheduleCompact()
 	}
 	// Batch acquire iterators.
-	for i := range snapChs {
-		snapCh := snapChs[i]
-		err := ldb.snapSem.Acquire(ctx, 1)
-		if err != nil {
-			if errors.Cause(err) == context.Canceled ||
-				errors.Cause(err) == context.DeadlineExceeded {
-				return false
-			}
-			log.Panic("db unreachable error, acquire iter", zap.Error(err))
+	for {
+		succeed := ldb.iterSem.TryAcquire(1)
+		if !succeed {
+			break
 		}
+		params, ok := ldb.iterQ.pop()
+		if !ok {
+			ldb.iterSem.Release(1)
+			break
+		}
+
+		iterCh := params.IterCh
+		iterRange := params.Range
 		snap, err := ldb.db.Snapshot()
 		if err != nil {
 			log.Panic("db error", zap.Error(err))
 		}
-		snapCh <- message.LimitedSnapshot{
-			Snapshot: snap,
-			Sema:     ldb.snapSem,
+		iter := snap.Iterator(iterRange[0], iterRange[1])
+		iterCh <- &message.LimitedIterator{
+			Iterator:   iter,
+			Sema:       ldb.iterSem,
+			ResolvedTs: params.ResolvedTs,
 		}
-		close(snapCh)
+		snap.Release()
+		// close(iterCh)
 	}
 
 	return true

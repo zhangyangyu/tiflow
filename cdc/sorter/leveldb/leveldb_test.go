@@ -143,12 +143,12 @@ func TestCompact(t *testing.T) {
 	require.Nil(t, db.Close())
 }
 
-func makeTask(events map[message.Key][]byte, needSnap bool) ([]actormsg.Message, chan message.LimitedSnapshot) {
-	snapCh := make(chan message.LimitedSnapshot, 1)
+func makeTask(events map[message.Key][]byte, needSnap bool) ([]actormsg.Message, chan message.LimitedIterator) {
+	snapCh := make(chan message.LimitedIterator, 1)
 	return []actormsg.Message{actormsg.SorterMessage(message.Task{
 		Events:   events,
-		SnapCh:   snapCh,
-		NeedSnap: needSnap,
+		IterCh:   snapCh,
+		NeedIter: needSnap,
 	})}, snapCh
 }
 

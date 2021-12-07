@@ -284,8 +284,8 @@ func TestAsyncWrite(t *testing.T) {
 			UID:                ls.uid,
 			TableID:            ls.tableID,
 			Events:             expectedEvents,
-			SnapCh:             ch,
-			NeedSnap:           needSnap,
+			IterCh:             ch,
+			NeedIter:           needSnap,
 			Cleanup:            false,
 			CleanupRatelimited: false,
 		}, task.SorterTask, "case #%d, %v", i, cs)
@@ -715,7 +715,7 @@ func TestPoll(t *testing.T) {
 
 	cases := []struct {
 		inputEvents []*model.PolymorphicEvent
-		inputSnap   func() *message.LimitedSnapshot
+		inputSnap   func() *message.LimitedIterator
 		state       *pollState
 
 		expectEvents        []*model.PolymorphicEvent
@@ -733,7 +733,7 @@ func TestPoll(t *testing.T) {
 				eventsBuf: make([]*model.PolymorphicEvent, 1),
 				outputBuf: newOutputBuffer(1),
 			},
-			inputSnap: func() *message.LimitedSnapshot { return nil },
+			inputSnap: func() *message.LimitedIterator { return nil },
 
 			expectEvents:     []*model.PolymorphicEvent{},
 			expectDeleteKeys: []message.Key{},
@@ -806,7 +806,7 @@ func TestPoll(t *testing.T) {
 				maxCommitTs:         2,
 				exhaustedResolvedTs: 2,
 			},
-			inputSnap: func() *message.LimitedSnapshot { return nil },
+			inputSnap: func() *message.LimitedIterator { return nil },
 
 			expectEvents:     []*model.PolymorphicEvent{},
 			expectDeleteKeys: []message.Key{},
@@ -832,7 +832,7 @@ func TestPoll(t *testing.T) {
 					advisedCapacity: 2,
 				},
 			},
-			inputSnap: func() *message.LimitedSnapshot { return nil },
+			inputSnap: func() *message.LimitedIterator { return nil },
 
 			expectEvents:     []*model.PolymorphicEvent{},
 			expectDeleteKeys: []message.Key{},
@@ -873,7 +873,7 @@ func TestPoll(t *testing.T) {
 	require.Nil(t, db.Close())
 }
 
-func handleTask(mb actor.Mailbox, iter *message.LimitedSnapshot, wg *sync.WaitGroup) {
+func handleTask(mb actor.Mailbox, iter *message.LimitedIterator, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		time.Sleep(20 * time.Millisecond)
@@ -882,9 +882,9 @@ func handleTask(mb actor.Mailbox, iter *message.LimitedSnapshot, wg *sync.WaitGr
 			continue
 		}
 		if iter != nil {
-			task.SorterTask.SnapCh <- *iter
+			task.SorterTask.IterCh <- *iter
 		}
-		close(task.SorterTask.SnapCh)
+		close(task.SorterTask.IterCh)
 		return
 	}
 }
@@ -892,12 +892,12 @@ func handleTask(mb actor.Mailbox, iter *message.LimitedSnapshot, wg *sync.WaitGr
 func newSnapshot(
 	ctx context.Context, t *testing.T, db db.DB,
 	sema *semaphore.Weighted,
-) func() *message.LimitedSnapshot {
-	return func() *message.LimitedSnapshot {
+) func() *message.LimitedIterator {
+	return func() *message.LimitedIterator {
 		require.Nil(t, sema.Acquire(ctx, 1))
 		snap, err := db.Snapshot()
 		require.Nil(t, err)
-		return &message.LimitedSnapshot{
+		return &message.LimitedIterator{
 			Snapshot: snap,
 			Sema:     sema,
 		}
@@ -926,10 +926,10 @@ func (emptyIterator) Release() error   { return nil }
 
 func newEmptySnapshot(
 	ctx context.Context, t *testing.T, sema *semaphore.Weighted,
-) func() *message.LimitedSnapshot {
-	return func() *message.LimitedSnapshot {
+) func() *message.LimitedIterator {
+	return func() *message.LimitedIterator {
 		require.Nil(t, sema.Acquire(ctx, 1))
-		return &message.LimitedSnapshot{
+		return &message.LimitedIterator{
 			Snapshot: emptySnapshot{},
 			Sema:     sema,
 		}

@@ -16,6 +16,8 @@ package main
 import (
 	"context"
 
+	"github.com/pingcap/ticdc/pkg/config"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cdc/model"
@@ -29,6 +31,11 @@ type cdcMonitReactor struct {
 
 func (r *cdcMonitReactor) Tick(_ context.Context, state orchestrator.ReactorState) (orchestrator.ReactorState, error) {
 	r.state = state.(*cdcReactorState)
+
+	if config.SchedulerV2Enabled {
+		// Disable advanced TS verification for the peer-message scheduler.
+		return r.state, nil
+	}
 
 	err := r.verifyTs()
 	if err != nil {

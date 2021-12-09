@@ -286,10 +286,21 @@ func (c *Capture) run(stdCtx context.Context) error {
 		defer c.AsyncClose()
 		conf := config.GetGlobalServerConfig()
 		processorFlushInterval := time.Duration(conf.ProcessorFlushInterval)
+		globalState := orchestrator.NewGlobalState()
+
+		if config.SchedulerV2Enabled {
+			globalState.SetOnCaptureAdded(func(captureID model.CaptureID, addr string) {
+				c.MessageRouter.AddPeer(captureID, addr)
+			})
+			globalState.SetOnCaptureRemoved(func(captureID model.CaptureID) {
+				c.MessageRouter.RemovePeer(captureID)
+			})
+		}
+
 		// when the etcd worker of processor returns an error, it means that the processor throws an unrecoverable serious errors
 		// (recoverable errors are intercepted in the processor tick)
 		// so we should also stop the processor and let capture restart or exit
-		processorErr = c.runEtcdWorker(ctx, c.processorManager, orchestrator.NewGlobalState(), processorFlushInterval)
+		processorErr = c.runEtcdWorker(ctx, c.processorManager, globalState, processorFlushInterval)
 		log.Info("the processor routine has exited", zap.Error(processorErr))
 	}()
 	wg.Add(1)
@@ -389,7 +400,18 @@ func (c *Capture) campaignOwner(ctx cdcContext.Context) error {
 
 		owner := c.newOwner(c.pdClient)
 		c.setOwner(owner)
-		err = c.runEtcdWorker(ownerCtx, owner, orchestrator.NewGlobalState(), ownerFlushInterval)
+
+		globalState := orchestrator.NewGlobalState()
+		if config.SchedulerV2Enabled {
+			globalState.SetOnCaptureAdded(func(captureID model.CaptureID, addr string) {
+				c.MessageRouter.AddPeer(captureID, addr)
+			})
+			globalState.SetOnCaptureRemoved(func(captureID model.CaptureID) {
+				c.MessageRouter.RemovePeer(captureID)
+			})
+		}
+
+		err = c.runEtcdWorker(ownerCtx, owner, globalState, ownerFlushInterval)
 		c.setOwner(nil)
 		log.Info("run owner exited", zap.Error(err))
 		// if owner exits, resign the owner key

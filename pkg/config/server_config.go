@@ -44,8 +44,7 @@ func init() {
 }
 
 // SchedulerV2Enabled determines wether to used the peer-message based scheduler.
-// TODO set this to true
-const SchedulerV2Enabled = false
+const SchedulerV2Enabled = true
 
 // SecurityConfig represents security config for server
 type SecurityConfig = security.Credential

@@ -256,6 +256,8 @@ func (c *Capture) run(stdCtx context.Context) error {
 		TimeAcquirer:     c.TimeAcquirer,
 		TableActorSystem: c.tableActorSystem,
 		SorterSystem:     c.sorterSystem,
+		MessageServer:    c.MessageServer,
+		MessageRouter:    c.MessageRouter,
 	})
 	err := c.register(ctx)
 	if err != nil {

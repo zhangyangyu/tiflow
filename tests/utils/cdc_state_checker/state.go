@@ -119,6 +119,11 @@ func (s *cdcReactorState) Update(key util.EtcdKey, value []byte, isInit bool) er
 				zap.String("changefeedID", changefeedID),
 				zap.Reflect("old-changefeed", oldChangefeedInfo),
 				zap.Reflect("new-changefeed", newChangefeedStatus))
+			if newChangefeedStatus.CheckpointTs < oldChangefeedInfo.CheckpointTs {
+				log.Warn("Changefeed checkpointTs regressed",
+					zap.Reflect("old-checkpoint-ts", oldChangefeedInfo.CheckpointTs),
+					zap.Reflect("new-checkpoint-ts", newChangefeedStatus.CheckpointTs))
+			}
 		} else {
 			log.Info("Changefeed added",
 				zap.String("changefeedID", changefeedID),

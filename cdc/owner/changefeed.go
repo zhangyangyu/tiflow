@@ -101,6 +101,10 @@ func newChangefeed4Test(
 	c := newChangefeed(id, gcManager)
 	c.newDDLPuller = newDDLPuller
 	c.newSink = newSink
+	// TODO (zixiong): remove this after we decouple the test cases from the scheduler's implementation.
+	c.newScheduler = func(ctx cdcContext.Context, startTs uint64) (scheduler, error) {
+		return newSchedulerV1(), nil
+	}
 	return c
 }
 

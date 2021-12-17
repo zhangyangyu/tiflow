@@ -144,9 +144,10 @@ func (ls *Sorter) wait(
 	inputCount, kvEventCount, resolvedEventCount := 0, 0, 0
 	appendInputEvent := func(ev *model.PolymorphicEvent) {
 		if ls.lastSentResolvedTs != 0 && ev.CRTs < ls.lastSentResolvedTs {
-			log.Panic("commit ts < resolved ts",
+			log.Warn("commit ts < resolved ts, drop",
 				zap.Uint64("lastSentResolvedTs", ls.lastSentResolvedTs),
 				zap.Any("event", ev), zap.Uint64("regionID", ev.RegionID()))
+			return
 		}
 		if ev.RawKV.OpType == model.OpTypeResolved {
 			if maxResolvedTs < ev.CRTs {

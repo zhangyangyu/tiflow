@@ -18,7 +18,6 @@ import (
 
 	"github.com/pingcap/check"
 	mm "github.com/pingcap/tidb/parser/model"
-	"github.com/pingcap/tidb/util/timeutil"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/util/testleak"
@@ -74,7 +73,7 @@ var testCaseDDL = &model.DDLEvent{
 
 func (s *canalFlatSuite) TestBuildCanalFlatEventBatchEncoder(c *check.C) {
 	defer testleak.AfterTest(c)()
-	config := NewConfig(config.ProtocolCanalJSON, timeutil.SystemLocation())
+	config := NewConfig(config.ProtocolCanalJSON)
 
 	builder := &canalFlatEventBatchEncoderBuilder{config: config}
 	encoder, ok := builder.Build().(*CanalFlatEventBatchEncoder)

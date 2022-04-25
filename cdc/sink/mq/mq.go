@@ -390,7 +390,7 @@ func NewKafkaSaramaSink(ctx context.Context, sinkURI *url.URL,
 		return nil, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 	}
 
-	encoderConfig := codec.NewConfig(protocol, util.TimezoneFromCtx(ctx))
+	encoderConfig := codec.NewConfig(protocol)
 	if err := encoderConfig.Apply(sinkURI, opts); err != nil {
 		return nil, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 	}
@@ -463,7 +463,7 @@ func NewPulsarSink(ctx context.Context, sinkURI *url.URL, filter *filter.Filter,
 		return nil, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 	}
 
-	encoderConfig := codec.NewConfig(protocol, util.TimezoneFromCtx(ctx))
+	encoderConfig := codec.NewConfig(protocol)
 	if err := encoderConfig.Apply(sinkURI, opts); err != nil {
 		return nil, errors.Trace(err)
 	}

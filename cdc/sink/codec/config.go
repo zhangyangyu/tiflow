@@ -16,7 +16,6 @@ package codec
 import (
 	"net/url"
 	"strconv"
-	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tiflow/pkg/config"
@@ -38,29 +37,30 @@ type Config struct {
 	enableTiDBExtension bool
 
 	// avro only
-	avroRegistry string
-	tz           *time.Location
+	avroRegistry            string
+	avroDecimalHandlingMode string
 }
 
 // NewConfig return a Config for codec
-func NewConfig(protocol config.Protocol, tz *time.Location) *Config {
+func NewConfig(protocol config.Protocol) *Config {
 	return &Config{
 		protocol: protocol,
 
 		maxMessageBytes: config.DefaultMaxMessageBytes,
 		maxBatchSize:    defaultMaxBatchSize,
 
-		enableTiDBExtension: false,
-		avroRegistry:        "",
-		tz:                  tz,
+		enableTiDBExtension:     false,
+		avroRegistry:            "",
+		avroDecimalHandlingMode: "precise",
 	}
 }
 
 const (
-	codecOPTEnableTiDBExtension = "enable-tidb-extension"
-	codecOPTMaxBatchSize        = "max-batch-size"
-	codecOPTMaxMessageBytes     = "max-message-bytes"
-	codecAvroRegistry           = "registry"
+	codecOPTEnableTiDBExtension     = "enable-tidb-extension"
+	codecOPTMaxBatchSize            = "max-batch-size"
+	codecOPTMaxMessageBytes         = "max-message-bytes"
+	codecOPTAvroDecimalHandlingMode = "avro-decimal-handling-mode"
+	codecAvroRegistry               = "registry"
 )
 
 // Apply fill the Config
@@ -90,6 +90,10 @@ func (c *Config) Apply(sinkURI *url.URL, opts map[string]string) error {
 		c.maxMessageBytes = a
 	}
 
+	if s := params.Get(codecOPTAvroDecimalHandlingMode); s != "" {
+		c.avroDecimalHandlingMode = s
+	}
+
 	if s, ok := opts[codecAvroRegistry]; ok {
 		c.avroRegistry = s
 	}
@@ -105,8 +109,8 @@ func (c *Config) WithMaxMessageBytes(bytes int) *Config {
 
 // Validate the Config
 func (c *Config) Validate() error {
-	if c.protocol != config.ProtocolCanalJSON && c.enableTiDBExtension {
-		return cerror.ErrMQCodecInvalidConfig.GenWithStack(`enable-tidb-extension only support canal-json protocol`)
+	if c.enableTiDBExtension && !(c.protocol == config.ProtocolCanalJSON || c.protocol == config.ProtocolAvro) {
+		return cerror.ErrMQCodecInvalidConfig.GenWithStack(`enable-tidb-extension only supports canal-json/avro protocol`)
 	}
 
 	if c.protocol == config.ProtocolAvro {
@@ -114,8 +118,8 @@ func (c *Config) Validate() error {
 			return cerror.ErrMQCodecInvalidConfig.GenWithStack(`Avro protocol requires parameter "registry"`)
 		}
 
-		if c.tz == nil {
-			return cerror.ErrMQCodecInvalidConfig.GenWithStack("Avro protocol requires timezone to be set")
+		if c.avroDecimalHandlingMode != "precise" && c.avroDecimalHandlingMode != "string" {
+			return cerror.ErrMQCodecInvalidConfig.GenWithStack(`%s value could only be "string" or "precise"`, codecOPTAvroDecimalHandlingMode)
 		}
 	}
 

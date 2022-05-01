@@ -94,10 +94,6 @@ func (c *Config) Apply(sinkURI *url.URL, opts map[string]string) error {
 		c.avroDecimalHandlingMode = s
 	}
 
-	if s, ok := opts[codecAvroRegistry]; ok {
-		c.avroRegistry = s
-	}
-
 	return nil
 }
 

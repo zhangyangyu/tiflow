@@ -32,7 +32,6 @@ import (
 	"github.com/pingcap/tiflow/cdc/sink/codec/avro"
 	"github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/security"
 	"go.uber.org/zap"
 )
 
@@ -533,14 +532,14 @@ const (
 	valueSchemaSuffix = "-value"
 )
 
-func newAvroEventBatchEncoderBuilder(credential *security.Credential, config *Config) (EncoderBuilder, error) {
+func newAvroEventBatchEncoderBuilder(config *Config) (EncoderBuilder, error) {
 	ctx := context.Background()
-	keySchemaManager, err := avro.NewAvroSchemaManager(ctx, credential, config.avroRegistry, keySchemaSuffix)
+	keySchemaManager, err := avro.NewAvroSchemaManager(ctx, nil, config.avroRegistry, keySchemaSuffix)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	valueSchemaManager, err := avro.NewAvroSchemaManager(ctx, credential, config.avroRegistry, valueSchemaSuffix)
+	valueSchemaManager, err := avro.NewAvroSchemaManager(ctx, nil, config.avroRegistry, valueSchemaSuffix)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

@@ -26,7 +26,6 @@ import (
 	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/check"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/util/testleak"
 )
 
@@ -179,7 +178,7 @@ func (s *AvroSchemaRegistrySuite) TestSchemaRegistry(c *check.C) {
 		Table:  "test1",
 	}
 
-	manager, err := NewAvroSchemaManager(getTestingContext(), &security.Credential{}, "http://127.0.0.1:8081", "-value")
+	manager, err := NewAvroSchemaManager(getTestingContext(), nil, "http://127.0.0.1:8081", "-value")
 	c.Assert(err, check.IsNil)
 
 	err = manager.ClearRegistry(getTestingContext(), table)
@@ -242,10 +241,10 @@ func (s *AvroSchemaRegistrySuite) TestSchemaRegistry(c *check.C) {
 
 func (s *AvroSchemaRegistrySuite) TestSchemaRegistryBad(c *check.C) {
 	defer testleak.AfterTest(c)()
-	_, err := NewAvroSchemaManager(getTestingContext(), &security.Credential{}, "http://127.0.0.1:808", "-value")
+	_, err := NewAvroSchemaManager(getTestingContext(), nil, "http://127.0.0.1:808", "-value")
 	c.Assert(err, check.NotNil)
 
-	_, err = NewAvroSchemaManager(getTestingContext(), &security.Credential{}, "https://127.0.0.1:8080", "-value")
+	_, err = NewAvroSchemaManager(getTestingContext(), nil, "https://127.0.0.1:8080", "-value")
 	c.Assert(err, check.NotNil)
 }
 
@@ -256,7 +255,7 @@ func (s *AvroSchemaRegistrySuite) TestSchemaRegistryIdempotent(c *check.C) {
 		Table:  "test1",
 	}
 
-	manager, err := NewAvroSchemaManager(getTestingContext(), &security.Credential{}, "http://127.0.0.1:8081", "-value")
+	manager, err := NewAvroSchemaManager(getTestingContext(), nil, "http://127.0.0.1:8081", "-value")
 	c.Assert(err, check.IsNil)
 	for i := 0; i < 20; i++ {
 		err = manager.ClearRegistry(getTestingContext(), table)
@@ -299,7 +298,7 @@ func (s *AvroSchemaRegistrySuite) TestGetCachedOrRegister(c *check.C) {
 		Table:  "test1",
 	}
 
-	manager, err := NewAvroSchemaManager(getTestingContext(), &security.Credential{}, "http://127.0.0.1:8081", "-value")
+	manager, err := NewAvroSchemaManager(getTestingContext(), nil, "http://127.0.0.1:8081", "-value")
 	c.Assert(err, check.IsNil)
 
 	called := 0

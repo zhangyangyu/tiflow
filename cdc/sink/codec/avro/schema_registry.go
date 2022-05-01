@@ -43,7 +43,7 @@ type AvroSchemaManager struct {
 	registryURL   string
 	subjectSuffix string
 
-	credential *security.Credential
+	credential *security.Credential // placeholder, currently always nil
 
 	cacheRWLock sync.RWMutex
 	cache       map[string]*schemaCacheEntry
@@ -108,7 +108,6 @@ func NewAvroSchemaManager(
 		registryURL:   registryURL,
 		cache:         make(map[string]*schemaCacheEntry, 1),
 		subjectSuffix: subjectSuffix,
-		credential:    credential,
 	}, nil
 }
 

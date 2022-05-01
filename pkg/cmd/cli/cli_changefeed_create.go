@@ -112,6 +112,7 @@ type createChangefeedOptions struct {
 	disableGCSafePointCheck bool
 	startTs                 uint64
 	timezone                string
+	schemaRegistry          string
 
 	cfg *config.ReplicaConfig
 }
@@ -135,6 +136,7 @@ func (o *createChangefeedOptions) addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().BoolVarP(&o.disableGCSafePointCheck, "disable-gc-check", "", false, "Disable GC safe point check")
 	cmd.PersistentFlags().Uint64Var(&o.startTs, "start-ts", 0, "Start ts of changefeed")
 	cmd.PersistentFlags().StringVar(&o.timezone, "tz", "SYSTEM", "timezone used when checking sink uri (changefeed timezone is determined by cdc server)")
+	cmd.PersistentFlags().StringVar(&o.timezone, "schema-registry", "", "Avro Schema Registry uri")
 }
 
 // complete adapts from the command line args to the data and client required.

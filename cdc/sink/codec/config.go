@@ -37,7 +37,7 @@ type Config struct {
 	enableTiDBExtension bool
 
 	// avro only
-	avroRegistry            string
+	avroSchemaRegistry      string
 	avroDecimalHandlingMode string
 }
 
@@ -50,7 +50,7 @@ func NewConfig(protocol config.Protocol) *Config {
 		maxBatchSize:    defaultMaxBatchSize,
 
 		enableTiDBExtension:     false,
-		avroRegistry:            "",
+		avroSchemaRegistry:      "",
 		avroDecimalHandlingMode: "precise",
 	}
 }
@@ -60,11 +60,11 @@ const (
 	codecOPTMaxBatchSize            = "max-batch-size"
 	codecOPTMaxMessageBytes         = "max-message-bytes"
 	codecOPTAvroDecimalHandlingMode = "avro-decimal-handling-mode"
-	codecAvroRegistry               = "registry"
+	codecOPTAvroSchemaRegistry      = "schema-registry"
 )
 
 // Apply fill the Config
-func (c *Config) Apply(sinkURI *url.URL, opts map[string]string) error {
+func (c *Config) Apply(sinkURI *url.URL, config *config.ReplicaConfig) error {
 	params := sinkURI.Query()
 	if s := params.Get(codecOPTEnableTiDBExtension); s != "" {
 		b, err := strconv.ParseBool(s)
@@ -94,6 +94,10 @@ func (c *Config) Apply(sinkURI *url.URL, opts map[string]string) error {
 		c.avroDecimalHandlingMode = s
 	}
 
+	if config.SchemaRegistry != "" {
+		c.avroSchemaRegistry = config.SchemaRegistry
+	}
+
 	return nil
 }
 
@@ -110,8 +114,8 @@ func (c *Config) Validate() error {
 	}
 
 	if c.protocol == config.ProtocolAvro {
-		if c.avroRegistry == "" {
-			return cerror.ErrMQCodecInvalidConfig.GenWithStack(`Avro protocol requires parameter "registry"`)
+		if c.avroSchemaRegistry == "" {
+			return cerror.ErrMQCodecInvalidConfig.GenWithStack(`Avro protocol requires parameter "%s"`, codecOPTAvroSchemaRegistry)
 		}
 
 		if c.avroDecimalHandlingMode != "precise" && c.avroDecimalHandlingMode != "string" {

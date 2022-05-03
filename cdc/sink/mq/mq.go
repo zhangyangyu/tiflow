@@ -389,7 +389,7 @@ func NewKafkaSaramaSink(ctx context.Context, sinkURI *url.URL,
 	}
 
 	encoderConfig := codec.NewConfig(protocol)
-	if err := encoderConfig.Apply(sinkURI, opts); err != nil {
+	if err := encoderConfig.Apply(sinkURI, replicaConfig); err != nil {
 		return nil, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 	}
 	// always set encoder's `MaxMessageBytes` equal to producer's `MaxMessageBytes`
@@ -461,7 +461,7 @@ func NewPulsarSink(ctx context.Context, sinkURI *url.URL, filter *filter.Filter,
 	}
 
 	encoderConfig := codec.NewConfig(protocol)
-	if err := encoderConfig.Apply(sinkURI, opts); err != nil {
+	if err := encoderConfig.Apply(sinkURI, replicaConfig); err != nil {
 		return nil, errors.Trace(err)
 	}
 	// todo: set by pulsar producer's `max.message.bytes`

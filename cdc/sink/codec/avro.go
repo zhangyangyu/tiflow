@@ -534,12 +534,12 @@ const (
 
 func newAvroEventBatchEncoderBuilder(config *Config) (EncoderBuilder, error) {
 	ctx := context.Background()
-	keySchemaManager, err := avro.NewAvroSchemaManager(ctx, nil, config.avroRegistry, keySchemaSuffix)
+	keySchemaManager, err := avro.NewAvroSchemaManager(ctx, nil, config.avroSchemaRegistry, keySchemaSuffix)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	valueSchemaManager, err := avro.NewAvroSchemaManager(ctx, nil, config.avroRegistry, valueSchemaSuffix)
+	valueSchemaManager, err := avro.NewAvroSchemaManager(ctx, nil, config.avroSchemaRegistry, valueSchemaSuffix)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

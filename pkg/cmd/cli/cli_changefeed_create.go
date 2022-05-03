@@ -269,6 +269,7 @@ func (o *createChangefeedOptions) completeCfg(
 			// TODO(neil) enable ID bucket.
 		}
 	}
+	cfg.SchemaRegistry = o.schemaRegistry
 	// Complete cfg.
 	o.cfg = cfg
 

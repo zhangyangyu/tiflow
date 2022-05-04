@@ -155,15 +155,17 @@ func (a *AvroEventBatchEncoder) avroEncode(ctx context.Context, e *model.RowChan
 		}
 	}
 
+	var fqdn string = e.Table.Schema + "." + e.Table.Table
+
 	schemaGen := func() (string, error) {
-		schema, err := rowToAvroSchema(e.Table.Table, cols, colInfos, enableTiDBExtension, a.decimalHandlingMode)
+		schema, err := rowToAvroSchema(fqdn, cols, colInfos, enableTiDBExtension, a.decimalHandlingMode)
 		if err != nil {
 			return "", errors.Annotate(err, "AvroEventBatchEncoder: generating schema failed")
 		}
 		return schema, nil
 	}
 
-	avroCodec, registryID, err := schemaManager.GetCachedOrRegister(ctx, *e.Table, e.TableInfoVersion, schemaGen)
+	avroCodec, registryID, err := schemaManager.GetCachedOrRegister(ctx, fqdn, e.TableInfoVersion, schemaGen)
 	if err != nil {
 		return nil, errors.Annotate(err, "AvroEventBatchEncoder: get-or-register failed")
 	}
@@ -243,10 +245,10 @@ type avroLogicalTypeSchema struct {
 	Scale       interface{} `json:"scale,omitempty"`
 }
 
-func rowToAvroSchema(name string, columnInfo []*model.Column, colInfos []rowcodec.ColInfo, enableTiDBExtension bool, decimalHandlingMode string) (string, error) {
+func rowToAvroSchema(fqdn string, columnInfo []*model.Column, colInfos []rowcodec.ColInfo, enableTiDBExtension bool, decimalHandlingMode string) (string, error) {
 	top := avroSchemaTop{
 		Tp:     "record",
-		Name:   name,
+		Name:   fqdn,
 		Fields: nil,
 	}
 

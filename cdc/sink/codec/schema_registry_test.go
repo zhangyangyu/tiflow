@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package avro
+package codec
 
 import (
 	"bytes"
@@ -29,9 +29,9 @@ import (
 	"github.com/pingcap/tiflow/pkg/util/testleak"
 )
 
-type AvroSchemaRegistrySuite struct{}
+type avroSchemaRegistrySuite struct{}
 
-var _ = check.Suite(&AvroSchemaRegistrySuite{})
+var _ = check.Suite(&avroSchemaRegistrySuite{})
 
 type mockRegistry struct {
 	mu       sync.Mutex
@@ -71,15 +71,13 @@ func startHTTPInterceptForTestingRegistry(c *check.C) {
 				return nil, err
 			}
 
-			// c.Assert(reqData.SchemaType, check.Equals, "AVRO")
-
 			var respData registerResponse
 			registry.mu.Lock()
 			item, exists := registry.subjects[subject]
 			if !exists {
 				item = &mockRegistrySchema{
 					content: reqData.Schema,
-					version: 0,
+					version: 1,
 					ID:      registry.newID,
 				}
 				registry.subjects[subject] = item
@@ -130,13 +128,14 @@ func startHTTPInterceptForTestingRegistry(c *check.C) {
 
 			registry.mu.Lock()
 			defer registry.mu.Unlock()
-			_, exists := registry.subjects[subject]
+			item, exists := registry.subjects[subject]
 			if !exists {
 				return httpmock.NewStringResponse(404, ""), nil
 			}
 
 			delete(registry.subjects, subject)
-			return httpmock.NewStringResponse(200, ""), nil
+			// simplify the response not returning all the versions
+			return httpmock.NewJsonResponse(200, []int{item.version})
 		})
 
 	failCounter := 0
@@ -147,7 +146,7 @@ func startHTTPInterceptForTestingRegistry(c *check.C) {
 			c.Assert(int64(len(data)), check.Equals, req.ContentLength)
 			if failCounter < 3 {
 				failCounter++
-				return httpmock.NewStringResponse(422, ""), nil
+				return httpmock.NewStringResponse(500, ""), nil
 			}
 			return httpmock.NewStringResponse(200, ""), nil
 		})
@@ -157,11 +156,11 @@ func stopHTTPInterceptForTestingRegistry() {
 	httpmock.DeactivateAndReset()
 }
 
-func (s *AvroSchemaRegistrySuite) SetUpSuite(c *check.C) {
+func (s *avroSchemaRegistrySuite) SetUpSuite(c *check.C) {
 	startHTTPInterceptForTestingRegistry(c)
 }
 
-func (s *AvroSchemaRegistrySuite) TearDownSuite(c *check.C) {
+func (s *avroSchemaRegistrySuite) TearDownSuite(c *check.C) {
 	stopHTTPInterceptForTestingRegistry()
 }
 
@@ -171,20 +170,22 @@ func getTestingContext() context.Context {
 	return ctx
 }
 
-func (s *AvroSchemaRegistrySuite) TestSchemaRegistry(c *check.C) {
+func (s *avroSchemaRegistrySuite) TestSchemaRegistry(c *check.C) {
 	defer testleak.AfterTest(c)()
 	table := model.TableName{
 		Schema: "testdb",
-		Table:  "test1",
+		Table:  "test",
 	}
 
 	manager, err := NewAvroSchemaManager(getTestingContext(), nil, "http://127.0.0.1:8081", "-value")
 	c.Assert(err, check.IsNil)
 
-	err = manager.ClearRegistry(getTestingContext(), table)
+	fqdn := table.Schema + "." + table.Table
+
+	err = manager.ClearRegistry(getTestingContext(), fqdn)
 	c.Assert(err, check.IsNil)
 
-	_, _, err = manager.Lookup(getTestingContext(), table, 1)
+	_, _, err = manager.Lookup(getTestingContext(), fqdn, 1)
 	c.Assert(err, check.ErrorMatches, `.*not\sfound.*`)
 
 	codec, err := goavro.NewCodec(`{
@@ -200,12 +201,12 @@ func (s *AvroSchemaRegistrySuite) TestSchemaRegistry(c *check.C) {
      }`)
 	c.Assert(err, check.IsNil)
 
-	_, err = manager.Register(getTestingContext(), table, codec)
+	_, err = manager.Register(getTestingContext(), fqdn, codec)
 	c.Assert(err, check.IsNil)
 
 	var id int
 	for i := 0; i < 2; i++ {
-		_, id, err = manager.Lookup(getTestingContext(), table, 1)
+		_, id, err = manager.Lookup(getTestingContext(), fqdn, 1)
 		c.Assert(err, check.IsNil)
 		c.Assert(id, check.Greater, 0)
 	}
@@ -230,37 +231,41 @@ func (s *AvroSchemaRegistrySuite) TestSchemaRegistry(c *check.C) {
           ]
      }`)
 	c.Assert(err, check.IsNil)
-	_, err = manager.Register(getTestingContext(), table, codec)
+	_, err = manager.Register(getTestingContext(), fqdn, codec)
 	c.Assert(err, check.IsNil)
 
-	codec2, id2, err := manager.Lookup(getTestingContext(), table, 999)
+	codec2, id2, err := manager.Lookup(getTestingContext(), fqdn, 999)
 	c.Assert(err, check.IsNil)
 	c.Assert(id2, check.Not(check.Equals), id)
 	c.Assert(codec.CanonicalSchema(), check.Equals, codec2.CanonicalSchema())
 }
 
-func (s *AvroSchemaRegistrySuite) TestSchemaRegistryBad(c *check.C) {
+func (s *avroSchemaRegistrySuite) TestSchemaRegistryBad(c *check.C) {
 	defer testleak.AfterTest(c)()
 	_, err := NewAvroSchemaManager(getTestingContext(), nil, "http://127.0.0.1:808", "-value")
 	c.Assert(err, check.NotNil)
+	c.Assert(err, check.ErrorMatches, "Test connection to Schema Registry failed: .*")
 
 	_, err = NewAvroSchemaManager(getTestingContext(), nil, "https://127.0.0.1:8080", "-value")
 	c.Assert(err, check.NotNil)
+	c.Assert(err, check.ErrorMatches, "Test connection to Schema Registry failed: .*")
 }
 
-func (s *AvroSchemaRegistrySuite) TestSchemaRegistryIdempotent(c *check.C) {
+func (s *avroSchemaRegistrySuite) TestSchemaRegistryIdempotent(c *check.C) {
 	defer testleak.AfterTest(c)()
 	table := model.TableName{
 		Schema: "testdb",
-		Table:  "test1",
+		Table:  "test",
 	}
+	fqdn := table.Schema + "." + table.Table
 
 	manager, err := NewAvroSchemaManager(getTestingContext(), nil, "http://127.0.0.1:8081", "-value")
 	c.Assert(err, check.IsNil)
 	for i := 0; i < 20; i++ {
-		err = manager.ClearRegistry(getTestingContext(), table)
+		err = manager.ClearRegistry(getTestingContext(), fqdn)
 		c.Assert(err, check.IsNil)
 	}
+
 	codec, err := goavro.NewCodec(`{
        "type": "record",
        "name": "test",
@@ -284,14 +289,14 @@ func (s *AvroSchemaRegistrySuite) TestSchemaRegistryIdempotent(c *check.C) {
 
 	id := 0
 	for i := 0; i < 20; i++ {
-		id1, err := manager.Register(getTestingContext(), table, codec)
+		id1, err := manager.Register(getTestingContext(), fqdn, codec)
 		c.Assert(err, check.IsNil)
 		c.Assert(id == 0 || id == id1, check.IsTrue)
 		id = id1
 	}
 }
 
-func (s *AvroSchemaRegistrySuite) TestGetCachedOrRegister(c *check.C) {
+func (s *avroSchemaRegistrySuite) TestGetCachedOrRegister(c *check.C) {
 	defer testleak.AfterTest(c)()
 	table := model.TableName{
 		Schema: "testdb",
@@ -308,7 +313,7 @@ func (s *AvroSchemaRegistrySuite) TestGetCachedOrRegister(c *check.C) {
 		called++
 		return `{
        "type": "record",
-       "name": "test",
+       "name": "test1",
        "fields":
          [
            {
@@ -326,19 +331,20 @@ func (s *AvroSchemaRegistrySuite) TestGetCachedOrRegister(c *check.C) {
           ]
      }`, nil
 	}
+	fqdn := table.Schema + "." + table.Table
 
-	codec, id, err := manager.GetCachedOrRegister(getTestingContext(), table, 1, schemaGen)
+	codec, id, err := manager.GetCachedOrRegister(getTestingContext(), fqdn, 1, schemaGen)
 	c.Assert(err, check.IsNil)
 	c.Assert(id, check.Greater, 0)
 	c.Assert(codec, check.NotNil)
 	c.Assert(called, check.Equals, 1)
 
-	codec1, _, err := manager.GetCachedOrRegister(getTestingContext(), table, 1, schemaGen)
+	codec1, _, err := manager.GetCachedOrRegister(getTestingContext(), fqdn, 1, schemaGen)
 	c.Assert(err, check.IsNil)
-	c.Assert(codec1, check.Equals, codec)
+	c.Assert(codec1 == codec, check.IsTrue) // check identity
 	c.Assert(called, check.Equals, 1)
 
-	codec2, _, err := manager.GetCachedOrRegister(getTestingContext(), table, 2, schemaGen)
+	codec2, _, err := manager.GetCachedOrRegister(getTestingContext(), fqdn, 2, schemaGen)
 	c.Assert(err, check.IsNil)
 	c.Assert(codec2, check.Not(check.Equals), codec)
 	c.Assert(called, check.Equals, 2)
@@ -346,7 +352,7 @@ func (s *AvroSchemaRegistrySuite) TestGetCachedOrRegister(c *check.C) {
 	schemaGen = func() (string, error) {
 		return `{
        "type": "record",
-       "name": "test",
+       "name": "test1",
        "fields":
          [
            {
@@ -372,7 +378,7 @@ func (s *AvroSchemaRegistrySuite) TestGetCachedOrRegister(c *check.C) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				codec, id, err := manager.GetCachedOrRegister(getTestingContext(), table, uint64(finalI), schemaGen)
+				codec, id, err := manager.GetCachedOrRegister(getTestingContext(), fqdn, uint64(finalI), schemaGen)
 				c.Assert(err, check.IsNil)
 				c.Assert(id, check.Greater, 0)
 				c.Assert(codec, check.NotNil)
@@ -382,7 +388,7 @@ func (s *AvroSchemaRegistrySuite) TestGetCachedOrRegister(c *check.C) {
 	wg.Wait()
 }
 
-func (s *AvroSchemaRegistrySuite) TestHTTPRetry(c *check.C) {
+func (s *avroSchemaRegistrySuite) TestHTTPRetry(c *check.C) {
 	defer testleak.AfterTest(c)()
 	payload := []byte("test")
 	req, err := http.NewRequest("POST", "http://127.0.0.1:8081/may-fail", bytes.NewReader(payload))
@@ -391,7 +397,8 @@ func (s *AvroSchemaRegistrySuite) TestHTTPRetry(c *check.C) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
 
-	resp, err := httpRetry(ctx, nil, req, false)
+	resp, err := httpRetry(ctx, nil, req)
 	c.Assert(err, check.IsNil)
+	c.Assert(resp.StatusCode, check.Equals, 200)
 	_ = resp.Body.Close()
 }

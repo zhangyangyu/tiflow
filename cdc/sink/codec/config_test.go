@@ -29,7 +29,7 @@ func TestNewConfig(t *testing.T) {
 	require.Equal(t, c.maxBatchSize, defaultMaxBatchSize)
 	require.Equal(t, c.enableTiDBExtension, false)
 	require.Equal(t, c.avroDecimalHandlingMode, "precise")
-	require.Equal(t, c.avroRegistry, "")
+	require.Equal(t, c.avroSchemaRegistry, "")
 }
 
 func TestConfigApplyValidate(t *testing.T) {
@@ -47,8 +47,8 @@ func TestConfigApplyValidate(t *testing.T) {
 	c := NewConfig(p)
 	require.Equal(t, c.protocol, config.ProtocolCanalJSON)
 
-	opts := make(map[string]string)
-	err = c.Apply(sinkURI, opts)
+	replicaConfig := &config.ReplicaConfig{}
+	err = c.Apply(sinkURI, replicaConfig)
 	require.Nil(t, err)
 	require.True(t, c.enableTiDBExtension)
 
@@ -59,8 +59,8 @@ func TestConfigApplyValidate(t *testing.T) {
 	uri = "kafka://127.0.0.1:9092/abc?protocol=canal-json&enable-tidb-extension=a"
 	sinkURI, err = url.Parse(uri)
 	require.Nil(t, err)
-	err = c.Apply(sinkURI, opts)
-	require.Error(t, err, "invalid syntax")
+	err = c.Apply(sinkURI, replicaConfig)
+	require.ErrorContains(t, err, "invalid syntax")
 
 	// Use enable-tidb-extension on other protocols
 	uri = "kafka://127.0.0.1:9092/abc?protocol=open-protocol&enable-tidb-extension=true"
@@ -72,12 +72,12 @@ func TestConfigApplyValidate(t *testing.T) {
 	require.Nil(t, err)
 
 	c = NewConfig(p)
-	err = c.Apply(sinkURI, opts)
+	err = c.Apply(sinkURI, replicaConfig)
 	require.Nil(t, err)
 	require.True(t, c.enableTiDBExtension)
 
 	err = c.Validate()
-	require.Error(t, err, "enable-tidb-extension only support canal-json protocol")
+	require.ErrorContains(t, err, "enable-tidb-extension only supports canal-json/avro protocol")
 
 	// avro
 	uri = "kafka://127.0.0.1:9092/abc?protocol=avro"
@@ -91,51 +91,78 @@ func TestConfigApplyValidate(t *testing.T) {
 	c = NewConfig(p)
 	require.Equal(t, c.protocol, config.ProtocolAvro)
 
-	err = c.Apply(sinkURI, opts)
+	err = c.Apply(sinkURI, replicaConfig)
 	require.Nil(t, err)
-	require.Equal(t, c.avroRegistry, "")
-	// `registry` not set
+	require.Equal(t, c.avroSchemaRegistry, "")
+	// `schema-registry` not set
 	err = c.Validate()
-	require.Error(t, err, `Avro protocol requires parameter "registry"`)
+	require.ErrorContains(t, err, `Avro protocol requires parameter "schema-registry"`)
 
-	opts["registry"] = "this-is-a-uri"
-	err = c.Apply(sinkURI, opts)
+	replicaConfig.SchemaRegistry = "this-is-a-uri"
+	err = c.Apply(sinkURI, replicaConfig)
 	require.Nil(t, err)
-	require.Equal(t, c.avroRegistry, "this-is-a-uri")
+	require.Equal(t, c.avroSchemaRegistry, "this-is-a-uri")
 	err = c.Validate()
 	require.Nil(t, err)
+
+	// avro-decimal-handling-mode
+	err = c.Apply(sinkURI, replicaConfig)
+	require.Nil(t, err)
+	require.Equal(t, c.avroDecimalHandlingMode, "precise")
+
+	uri = "kafka://127.0.0.1:9092/abc?protocol=avro&avro-decimal-handling-mode=string"
+	sinkURI, err = url.Parse(uri)
+	require.Nil(t, err)
+
+	err = c.Apply(sinkURI, replicaConfig)
+	require.Nil(t, err)
+	require.Equal(t, c.avroDecimalHandlingMode, "string")
+
+	err = c.Validate()
+	require.Nil(t, err)
+
+	uri = "kafka://127.0.0.1:9092/abc?protocol=avro&avro-decimal-handling-mode=invalid"
+	sinkURI, err = url.Parse(uri)
+	require.Nil(t, err)
+
+	err = c.Apply(sinkURI, replicaConfig)
+	require.Nil(t, err)
+	require.Equal(t, c.avroDecimalHandlingMode, "invalid")
+
+	err = c.Validate()
+	require.ErrorContains(t, err, `avro-decimal-handling-mode value could only be "string" or "precise"`)
 
 	// Illegal max-message-bytes.
 	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-message-bytes=a"
 	sinkURI, err = url.Parse(uri)
 	require.Nil(t, err)
-	err = c.Apply(sinkURI, opts)
-	require.Error(t, err, "invalid syntax")
+	err = c.Apply(sinkURI, replicaConfig)
+	require.ErrorContains(t, err, "invalid syntax")
 
 	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-message-bytes=-1"
 	sinkURI, err = url.Parse(uri)
 	require.Nil(t, err)
-	err = c.Apply(sinkURI, opts)
+	err = c.Apply(sinkURI, replicaConfig)
 	require.Nil(t, err)
 
 	err = c.Validate()
-	require.Error(t, err, cerror.ErrMQCodecInvalidConfig)
+	require.ErrorIs(t, err, cerror.ErrMQCodecInvalidConfig)
 
 	// Illegal max-batch-size
 	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-batch-size=a"
 	sinkURI, err = url.Parse(uri)
 	require.Nil(t, err)
-	err = c.Apply(sinkURI, opts)
-	require.Error(t, err, "invalid syntax")
+	err = c.Apply(sinkURI, replicaConfig)
+	require.ErrorContains(t, err, "invalid syntax")
 
 	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-batch-size=-1"
 	sinkURI, err = url.Parse(uri)
 	require.Nil(t, err)
 
 	c = NewConfig(config.ProtocolOpen)
-	err = c.Apply(sinkURI, opts)
+	err = c.Apply(sinkURI, replicaConfig)
 	require.Nil(t, err)
 
 	err = c.Validate()
-	require.Error(t, err, cerror.ErrMQCodecInvalidConfig)
+	require.ErrorIs(t, err, cerror.ErrMQCodecInvalidConfig)
 }

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package avro
+package codec
 
 import (
 	"bytes"
@@ -379,6 +379,7 @@ func httpRetry(ctx context.Context, credential *security.Credential, r *http.Req
 			goto checkCtx
 		}
 
+		// retry 4xx codes like 409 & 422 has no meaning since it's non-recoverable
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 || (resp.StatusCode >= 400 && resp.StatusCode < 500) {
 			break
 		}

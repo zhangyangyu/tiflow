@@ -129,7 +129,7 @@ func (m *AvroSchemaManager) Register(ctx context.Context, fqdn string, codec *go
 		return 0, cerror.ErrAvroSchemaAPIError.GenWithStackByArgs()
 	}
 	req.Header.Add("Accept", "application/vnd.schemaregistry.v1+json")
-	resp, err := httpRetry(ctx, m.credential, req, false)
+	resp, err := httpRetry(ctx, m.credential, req)
 	if err != nil {
 		return 0, err
 	}
@@ -141,6 +141,8 @@ func (m *AvroSchemaManager) Register(ctx context.Context, fqdn string, codec *go
 	}
 
 	if resp.StatusCode != 200 {
+		// https://docs.confluent.io/platform/current/schema-registry/develop/api.html#post--subjects-(string-%20subject)-versions
+		// 409 for incompatible schema
 		log.Warn("Failed to register schema to the Registry, HTTP error",
 			zap.Int("status", resp.StatusCode),
 			zap.String("uri", uri),
@@ -201,7 +203,7 @@ func (m *AvroSchemaManager) Lookup(ctx context.Context, fqdn string, tiSchemaID 
 	}
 	req.Header.Add("Accept", "application/vnd.schemaregistry.v1+json, application/vnd.schemaregistry+json, application/json")
 
-	resp, err := httpRetry(ctx, m.credential, req, true)
+	resp, err := httpRetry(ctx, m.credential, req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -264,6 +266,8 @@ type SchemaGenerator func() (string, error)
 
 // GetCachedOrRegister checks if the suitable Avro schema has been cached.
 // If not, a new schema is generated, registered and cached.
+// Re-registering an existing schema shall return the same id(and version), so even if the
+// cache is out-of-sync with schema registry, we could reload it.
 func (m *AvroSchemaManager) GetCachedOrRegister(ctx context.Context, fqdn string, tiSchemaID uint64, schemaGen SchemaGenerator) (*goavro.Codec, int, error) {
 	key := m.tableNameToSchemaSubject(fqdn)
 	m.cacheRWLock.RLock()
@@ -326,7 +330,7 @@ func (m *AvroSchemaManager) ClearRegistry(ctx context.Context, fqdn string) erro
 		return cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
 	}
 	req.Header.Add("Accept", "application/vnd.schemaregistry.v1+json, application/vnd.schemaregistry+json, application/json")
-	resp, err := httpRetry(ctx, m.credential, req, true)
+	resp, err := httpRetry(ctx, m.credential, req)
 	if err != nil {
 		return err
 	}
@@ -345,7 +349,7 @@ func (m *AvroSchemaManager) ClearRegistry(ctx context.Context, fqdn string) erro
 	return cerror.ErrAvroSchemaAPIError.GenWithStack("Error when clearing Registry, status = %d", resp.StatusCode)
 }
 
-func httpRetry(ctx context.Context, credential *security.Credential, r *http.Request, allow404 bool) (*http.Response, error) {
+func httpRetry(ctx context.Context, credential *security.Credential, r *http.Request) (*http.Response, error) {
 	var (
 		err  error
 		resp *http.Response
@@ -375,7 +379,7 @@ func httpRetry(ctx context.Context, credential *security.Credential, r *http.Req
 			goto checkCtx
 		}
 
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 || (resp.StatusCode == 404 && allow404) {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 || (resp.StatusCode >= 400 && resp.StatusCode < 500) {
 			break
 		}
 		log.Warn("HTTP server returned with error", zap.Int("status", resp.StatusCode))
